@@ -1,0 +1,863 @@
+<!DOCTYPE HTML>
+<html>
+    <head>
+        <title>GCryptDrive implementation</title>
+        <meta http-equiv=content-type content=text/html;charset=UTF-8>
+        <style>
+            @import url(http://fonts.googleapis.com/css?family=Droid+Serif);
+            @import url(http://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+            @font-face {
+              font-family: 'tea';
+              src: url(simplified-SentyTEA-Platinum.ttf);
+            };
+
+            body {
+              font-family: 'Droid Serif';
+            }
+
+            h1, h2 {
+              font-family: 'tea';
+            }
+
+            .remark-slide-content h1 {
+                font-size: 32px;
+            }
+
+            .remark-slide-content h2 {
+                font-size: 24px;
+            }
+
+
+            circle, ellipse {
+              stroke: #000;
+              fill: none;
+            }
+            circle.act {
+              fill: #fce;
+            }
+
+            line {
+              stroke: #000;
+              stroke-width: 5;
+            }
+            line.act {
+              stroke: red;
+            }
+
+            path {
+              fill: none;
+              stroke: #000;
+            }
+
+            marker path {
+              fill: #000;
+              stroke: none;
+            }
+            marker.act path {
+              fill: red;
+              stroke: none;
+            }
+            marker.frame path {
+              fill: #fff;
+              stroke: #000;
+            }
+
+            text {
+              text-anchor: middle;
+              dominant-baseline: middle;
+              font-family: sans-serif;
+            }
+        </style>
+
+    </head>
+    <body>
+        <textarea id=source>
+class: center, middle
+
+# GCryptDrive 實作
+
+# CindyLinz
+
+2015.8.6
+
+---
+
+# GCryptDrive
+
+  + 這程式用來開一個使用 Google Drive 儲存空間的加密檔案系統
+
+--
+
+  + 用起來是一個檔案系統<br>
+    (但會有一點慢, 所有的資料都要透過網路往來 Google Drive)
+
+--
+
+  + 存在 Google Drive 上的資料都是加密過的, 理論上 Google 也解不開<br>
+    這是為了... (略)
+
+--
+
+<center><img src=6a0120a85dcdae970b0128776ff992970c-pi.png></center>
+<small>image from<br>[http://blog.codinghorror.com/the-works-on-my-machine-certification-program/]()</small>
+
+---
+
+# 今日目標
+
+  + 希望大家都覺得這個東西自己彷彿就寫得出來, 只差在要不要花時間寫而已
+
+--
+
+  + 認識寫這系統所用到的 library, 如果有需要的時候也可以隨手拿來用
+
+--
+
+  + 覺得 Haskell 不只可以拿來作神聖高尚不食人間煙火的理論東西, 也可以拿來作很生活化的應用..
+
+  <!--+ <del>看看如果 Haskell 程式寫糊了會是什麼模樣</del>-->
+
+---
+
+# GCryptDrive Usage - 建立新的檔案系統
+
+  + 先到 Google Drive 網頁裡開一個目錄
+    <br>(不過如果想把所有東西都塞在根目錄那就不用開了ww)
+
+--
+  + 在目錄上按右鍵選「Get link」會得到一串<br>
+    `https://drive.google.com/open?id=xxxxxxx`<br>
+    這樣的網址<br>
+    把這個 id= 後面的 `xxxxxxx` 記下來<br>
+    (如果想用根目錄, 這裡的 xxxxxxx=root)
+
+--
+  + 在自己電腦上選一個 GCryptDrive 存放工作資料與加密密碼的目錄
+
+--
+  + 執行
+    ```shell
+    $ GCryptDrive -c xxxxxx -w 工作目錄
+
+    Visit the following URL to retrieve a verification code:
+
+    https://accounts.google.com/o/oauth2/auth?response_type=code&amp;client_id=419521340217-v7k30njgu1s2a872489cp30hl6nu247l.apps.googleusercontent.com&amp;redirect_uri=urn:ietf:wg:oauth:2.0:oob&amp;scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive
+
+    Verification code:
+    ```
+    開啟這個網址來授權並指定用哪一個 Google 帳號的 Google Drive 空間
+
+---
+
+# GCryptDrive Usage - 使用檔案系統
+  + 在自己電腦裡選一個 mount point 目錄, 和建立系統時選的工作目錄
+
+--
+  + 執行 (daemon 模式)
+    ```shell
+    $ GCryptDrive -m mount目錄 -w 工作目錄
+    ```
+
+    或執行 (debug 模式)
+    ```shell
+    $ GCryptDrive -m mount目錄 -w 工作目錄 -d
+    ```
+
+    (如果工作目錄裡的 token 太久沒更新, 會再跳一次授權的訊息)
+
+--
+  + 使用
+    ```shell
+    $ cd mount目錄 ; cp ... ... ; rm -rf ... ...
+    ...
+    ```
+
+--
+  + 用完以後
+    ```shell
+    $ fusermount -u mount目錄
+    ```
+
+---
+
+# 程式架構
+
+<center><svg style=width:50% viewbox='0 0 500 1000'>
+  <def>
+    <g id=store transform='scale(10)' style='stroke:#000;stroke-width:.2'>
+      <ellipse cx=5 cy=1.5 rx=5 ry=1.5 />
+      <path d='M 0,1.5 L 0,8.5 A 5,1.5 0 0,0 10,8.5 L 10,1.5' />
+    </g>
+
+    <g id=cloud transform='scale(.4) translate(-240 -160)'>
+      <path d="M 410,194 C 392,189 373,195 361,207 C 354,199 345,193 334,190 C 306,182 277,199 270,227 C 269,229 269,231 269,233 C 244,230 220,246 213,271 C 206,296 219,322 241,332 C 240,335 239,338 238,341 C 231,368 247,397 275,405 C 289,408 303,406 314,400 C 321,413 332,424 348,428 C 370,434 393,425 405,407 C 410,410 415,413 421,415 C 449,422 478,406 486,378 C 489,364 487,350 480,338 C 487,332 492,323 495,314 C 502,286 486,257 458,250 C 455,249 452,248 449,248 C 451,224 435,200 410,194" style="stroke:#000;stroke-width:5" />
+    </g>
+
+    <g id=crypt transform='scale(.8) translate(60 80)'>
+      <circle r=20 style='stroke:#000;stroke-width:2' />
+      <circle r=40 style='stroke:#000;stroke-width:2' />
+      <circle r=60 style='stroke:#000;stroke-width:2' />
+      <circle r=80 style='stroke:#000;stroke-width:2' />
+      <line x1=0 x2=0 y1=-80 y2=80 style='stroke:#000;stroke-width:2' />
+      <line x1=-80 x2=80 y1=0 y2=0 style='stroke:#000;stroke-width:2' />
+      <line x1=-56.5 x2=56.5 y1=-56.5 y2=56.5 style='stroke:#000;stroke-width:2' />
+      <line x1=56.5 x2=-56.5 y1=-56.5 y2=56.5 style='stroke:#000;stroke-width:2' />
+
+      <path d='M -56.5,-56.5 A 80,80 0 0,1 56.5,-56.5 L 42.4,-42.4 A 60,60 0 0,0 -42.4,-42.4 z' style='fill:#000' />
+      <path d='M 56.5,56.5 A 80,80 0 0,1 -56.5,56.5 L -42.4,42.4 A 60,60 0 0,0 42.4,42.4 z' style='fill:#000' />
+      <path d='M 0,-60 A 60,60 0 0,0 0,60 L 0,40 A 40,40 0 0,1 0,-40 z' style='fill:#000' />
+      <path d='M -40,0 A 40,40 0 0,0 40,0 L 20,0 A 20,20 0 0,1 -20,0 z' style='fill:#000' />
+    </g>
+
+    <g id=interface transform='translate(10 0)' style='stroke:#000;stroke-width:2;fill:transparent'>
+      <rect x=40 y=10 width=50 height=20 />
+      <rect x=40 y=40 width=50 height=20 />
+      <rect x=40 y=70 width=50 height=20 />
+
+      <path d='M 70,10 L 70,0 L 0,0 L 0,100 L 70,100 L 70,90' />
+      <line x1=70 x2=70 y1=30 y2=40 style='stroke-width:2' />
+      <line x1=70 x2=70 y1=60 y2=70 style='stroke-width:2' />
+    </g>
+  </def>
+
+  <use xlink:href=#interface transform='translate(100 10)' />
+  <text x=250 y=60 style=text-anchor:start>FUSE</text>
+  <use xlink:href=#store transform='translate(100 150)' />
+  <text x=250 y=200 style=text-anchor:start>Local storage (cache)</text>
+  <use xlink:href=#crypt transform='translate(100 290)' />
+  <text x=250 y=340 style=text-anchor:start>Crypto</text>
+  <use xlink:href=#cloud transform='translate(100 450)' />
+  <text x=250 y=500 style=text-anchor:start>Network</text>
+  <use xlink:href=#store transform='translate(100 590)' />
+  <text x=250 y=640 style=text-anchor:start>Google Drive</text>
+</svg></center>
+
+---
+
+# Source
+
+  + [GCryptDrive @ github](https://github.com/CindyLinz/GCryptDrive)
+
+    簡報中出現的範例, 都是這程式裡面實際使用的片段.
+
+--
+
+  + coding style 可能不佳 (寫得太趕, 想到哪寫到哪 orz), 但是可以用 :D
+
+--
+
+  + 原始碼裡面會示範怎麼把這些不太相干的 library 糊在一起用
+
+--
+
+  + 如果自己想用這些 library, 遇到不順卡關的地方, 可以參考在這程式裡面它是怎麼用的.
+
+---
+
+# 以下將介紹的 libraries
+
+  + [google-drive](http://hackage.haskell.org/package/google-drive) -- 用來存取 Google Drive 的 library
+
+  + [google-oauth2](http://hackage.haskell.org/package/google-oauth2) -- 用來登入 Google 服務的 library, 登入取得的 token 交由 google-drive 使用
+
+  + [cryptonite](http://hackage.haskell.org/package/cryptonite) -- 加解密用的演算法大集合, 然後我也順便使用它附的密碼級 random 來生成需要的密鑰和IV(初始向量)
+
+  + [conduit](http://hackage.haskell.org/package/conduit) -- 用有限的記憶體處理巨大資料的 library, 正規處理 lazy IO 意味的工具之一. 看起來有時候像 pipe, 有時候像 coroutine.. whatever
+
+  + [binary](http://hackage.haskell.org/package/binary) -- 把資料壓成 bytes 或從 bytes 解回資料
+
+  + [HFuse](http://hackage.haskell.org/package/HFuse) -- libfuse (FUSE = Filesystem in USErspace) 的 Haskell binding, 讓我們實作幾個 handler 就可以變出一個檔案系統
+
+  + [System.Console.GetOpt](https://downloads.haskell.org/~ghc/latest/docs/html/libraries/base-4.8.1.0/System-Console-GetOpt.html) -- 用來剖析指令參數
+
+---
+
+# package: google-oauth2
+
+```haskell
+import Network.Google.OAuth2
+
+data OAuth2Client = OAuth2Client
+  { clientId :: !String
+  , clientSecret :: !String
+  }
+
+getAccessToken
+  :: OAuth2Client
+  -&gt; [OAuth2Scope]
+  -&gt; Maybe FilePath -- File in which to cache the token
+  -&gt; IO OAuth2Token
+```
+
+```haskell
+getGoogleToken :: FilePath -&gt; IO Token
+getGoogleToken workDir = do
+  let
+    client = OAuth2Client
+      "419521340217-v7k30njgu1s2a872489cp30hl6nu247l.apps.googleusercontent.com"
+      "LfdjyTBv11auvSEOAr7A2UoQ"
+    scopes = ["https://www.googleapis.com/auth/drive"]
+  getAccessToken client scopes (Just (workDir &lt;/&gt; ".token"))
+```
+
+---
+
+# package: google-drive
+
+```haskell
+import Network.Google.Drive.File
+
+data File = File
+  { fileId :: FileId -- type FileId = Text
+  , fileData :: FileData
+  }
+
+data FileData = FileData
+  { fileTitle :: !FileTitle -- type FileTitle = Text
+  , fileModified :: !UTCTime
+  , fileParents :: ![FileId]
+  , fileTrashed :: !Bool
+  , fileSize :: !(Maybe Int)
+  , fileDownloadUrl :: !(Maybe Text)
+  , fileMimeType :: !MimeType -- type MimeType = Text
+  , fileExportLinks :: !(Data.HashMap.Strict.HashMap MimeType Text)
+  }
+```
+
+  + `fileTitle` 是可以任意指定的, 但是同一個目錄底下可以有一堆同 title 檔案
+  + `FileId` 不能隨意指定, 是建立新檔案的時候自動配給的
+  + `fileParents` 可以指定很多個
+
+不能直接用給 path 的方式直接對應檔案.... 只好自己作 wwww
+
+---
+# package: google-drive
+
+```haskell
+import Network.Google.Api
+runApi
+  :: String -- token
+  -> Api a
+  -> IO (Either ApiError a)
+type DownloadSink a =
+  ResumableSource (ResourceT IO) ByteString -> ResourceT IO a
+```
+
+```haskell
+import Network.Google.Drive.File
+getFile :: FileId -> Api (Maybe File) 
+createFile :: FileData -> Api File
+deleteFile :: FileData -> Api ()
+downloadFile :: File -> DownloadSink a -> Api (Maybe a)
+```
+
+```haskell
+import Network.Google.Drive.Upload
+type UploadSource = Int -> Source (ResourceT IO) ByteString
+updateFileWithContent
+  :: FileId -> FileData
+  -> Int -> UploadSource -> Api File
+```
+
+(ResumableSource, Source, Sink, Conduit 是 package conduit 的東西)
+
+---
+# package: google-drive
+
+```haskell
+runGoogleWith :: Token -> Api a -> IO (Either ApiError a)
+runGoogleWith = runApi
+
+createGoogleEntry
+  :: Token -> FileId -> T.Text -> EntryType -> IO Entry
+createGoogleEntry token containerFid name ty = do
+  putStrLn $ "createGoogleEntry " ++ T.unpack name ++ " " ++ show ty
+  now &lt;- getCurrentTime
+
+  res &lt;- runGoogleWith token $ do
+    G.createFile G.FileData
+      { fileTitle = "data"
+      , fileModified = now
+      , fileParents = [containerFid]
+      , fileTrashed = False
+      , fileSize = Nothing
+      , fileDownloadUrl = Nothing
+      , fileMimeType = "application/octet-stream"
+      , fileExportLinks = HM.empty
+      }
+  ...
+```
+
+---
+
+# package: google-drive
+
+```haskell
+uploader from =
+  sourceFile localPath $= encryptEntry entry =$= process 0 where
+    process offset = ...
+
+res &lt;- runGoogleWith token $ do
+  G.updateFileWithContent fid fileData uploadSize uploader
+
+...
+```
+
+($=), (=$=), (=$).. 是 conduit 的 operator
+
+---
+
+# 選用的加密方法
+
+AES256, CBC mode
+<center>
+  <img src=CBC_encryption.svg>
+  <img src=CBC_decryption.svg><br>
+</center>
+<small>image from [wikipedia](https://en.wikipedia.org/wiki/Block_cipher_mode_of_operation)</small>
+
+---
+
+# package: cryptonite
+
+```haskell
+import Crypto.Cipher.Types
+
+class Cipher cipher where
+  cipherInit :: ByteArray key => key -> CryptoFailable cipher 
+  cipherKeySize :: cipher -> KeySizeSpecifier
+data CryptoFailable a = CryptoPassed a | CryptoFailed CryptoError
+data KeySizeSpecifier
+  = KeySizeRange Int Int -- in the range [min,max]
+  | KeySizeEnum [Int] -- one of the specified values
+  | KeySizeFixed Int
+
+class Cipher cipher => BlockCipher cipher where
+  blockSize :: cipher -> Int
+  cbcEncrypt :: ByteArray ba => cipher -> IV cipher -> ba -> ba
+  cbcDecrypt :: ByteArray ba => cipher -> IV cipher -> ba -> ba
+makeIV :: (ByteArrayAccess b, BlockCipher c) => b -> Maybe (IV c)
+
+instance ByteArray Data.ByteString.ByteString
+instance ByteArrayAccess Data.ByteString.ByteString
+  -- 這定義在 Data.ByteArray
+```
+```haskell
+import Crpyto.Cipher.AES
+instance Cipher AES256
+instance BlockCipher AES256
+```
+
+---
+
+# Chunk 編碼方式
+
+  + AES 是 block cipher, 只能一次加密一個固定大小的 block, 所以資料要裁成指定大小的段落
+  + 我們要在裡面記錄資料真正的大小, 這樣解密以後才知道尾巴有多長需要丟掉
+
+<center>
+  <svg viewbox='-20 0 950 200'>
+    <def>
+      <g id=block_seg>
+        <rect x=0 y=0 width=200 height=20 style=stroke:#000;stroke-width:1;fill:transparent />
+        <text x=100 y=-17 style=text-anchor:middle;font-size:12>block size</text>
+        <path d="M 0,0 A 50,15 0 0,1 35,-15" style=stroke:#000;stroke-width:1 />
+        <path d="M 200,0 A 50,15 0 0,0 165,-15" style=stroke:#000;stroke-width:1 />
+      </g>
+    </def>
+
+    <use transform='translate(0 50)' xlink:href=#block_seg />
+    <use transform='translate(205 50)' xlink:href=#block_seg />
+    <use transform='translate(410 50)' xlink:href=#block_seg />
+    <use transform='translate(615 50)' xlink:href=#block_seg />
+
+    <g transform='translate(615 50)' >
+      <text x=60 y=37 style=text-anchor:middle;font-size:12>tail len</text>
+      <path d="M 0,20 a 30,15 0 0,0 15,15" style=stroke:#000;stroke-width:1 />
+      <path d="M 120,20 a 30,15 0 0,1 -15,15" style=stroke:#000;stroke-width:1 />
+      <rect x=120 y=0 width=70 height=20 style=stroke:#000;stroke-width:1;fill:#ccc />
+
+      <line x1=195 y1=20 x2=195 y2=60 style=stroke:#000;stroke-width:1 />
+      <path d="M 195,20 L 200,30 L 190,30 Z" style="stroke:transparent;fill:#000" />
+      <g transform='translate(195 70)' style=text-anchor:middle;font-size:12>
+        <text y=0>the last byte</text>
+        <text y=20>records the tail length</text>
+        <text y=40>between [0,block size)</text>
+      </g>
+    </g>
+  </svg>
+</center>
+
+  + AES 家族的 block size 是 128 bits, 也就是 16 bytes, AES256 的 256 是指 key 的 size 256bits 不是 block size
+  + 這個編碼方式可以適用 block size 256 bytes (2048 bits) 以內的演算法
+
+---
+
+# package: conduit
+
+```haskell
+-- the size of the last chunk is in [0,chunkSize)
+byChunk :: MonadIO m => Int -> Conduit B.ByteString m B.ByteString
+byChunk size = go 0 [] where
+  go len pendings = do
+    await >>= \case
+      Nothing -> yield $ BL.toStrict . BL.fromChunks
+        $ reverse pendings
+      Just fragment
+        | len' &lt; size -> go len' (fragment : pendings)
+        | otherwise -> do
+          yield $ BL.toStrict . BL.fromChunks
+            $ reverse (formerFrag : pendings)
+          go2 laterFrag
+        where
+          len' = len + B.length fragment
+          (formerFrag, laterFrag) = B.splitAt (size - len) fragment
+          go2 frag
+            | B.length frag >= size = do
+              let (former, later) = B.splitAt size frag
+              yield former
+              go2 later
+            | otherwise = go (B.length frag) [frag]
+```
+(最後一個 byte 記 tail 長度是在 encrypt / decrypt 函數裡做, 這裡只切割)
+
+---
+
+# package: conduit
+
+```haskell
+encrypt :: (BlockCipher cipher, MonadIO m) =>
+  cipher -> IV cipher -> Conduit B.ByteString m B.ByteString
+encrypt cipher iv = byChunk chunkSize =$= process where
+  chunkSize = blockSize cipher
+  process = go iv where
+    go iv = do
+      Just chunk &lt;- await
+      let chunkLen = B.length chunk
+
+      if chunkLen &lt; chunkSize then
+        yield $ cfbEncrypt cipher iv $ BL.toStrict $ BL.fromChunks
+          [ chunk
+          , B.replicate (fromIntegral $ chunkSize - chunkLen - 1) 0
+          , B.singleton (fromIntegral chunkLen)
+          ]
+      else do
+        let
+          cipherText = cfbEncrypt cipher iv chunk
+          Just iv' = makeIV cipherText
+        yield cipherText
+        go iv'
+```
+
+---
+
+# 目錄檔案格式
+
+用檔案來存目錄 -- 也就是一堆 entry 的集合
+
+```haskell
+import qualified Data.ByteString as B
+import qualified Data.Text as T
+
+data Entry = Entry
+  { entryVer :: {-# UNPACK #-} !Word16 -- 預留局部改版的可能性
+  , entryKey :: B.ByteString -- 對應的檔案加密用的密碼
+  , entryIV :: B.ByteString -- 對應的檔案加密用的 initial vector
+  , entryName :: T.Text -- 檔名
+  , entryId :: FileId -- Google Drive 上的 FileId
+  , entrySize :: FileOffset -- 檔案大小
+  , entryMode :: FileMode -- 檔案類型是目錄或一般檔案 與 存取權限
+  , entryCTime :: EpochTime
+  , entryMTime :: EpochTime
+  } deriving Show
+```
+
+---
+
+# package: binary
+
+```haskell
+import Data.Binary.Put
+runPut :: Put -> ByteString
+```
+
+```haskell
+import Data.Binary.Put
+encodeEntry :: Entry -> Put
+encodeEntry Entry{..} = do
+  putWord16le entryVer
+  putByteString entryKey
+  putByteString entryIV
+
+  putByteString (T.encodeUtf8 entryName)
+  putWord8 0
+
+  putByteString (T.encodeUtf8 entryId)
+  putWord8 0
+
+  putWord64le (fromIntegral entrySize)
+  putWord32le (fromIntegral entryMode)
+  putWord64le (let CTime ctime = entryCTime in fromIntegral ctime)
+  putWord64le (let CTime mtime = entryMTime in fromIntegral mtime)
+```
+
+---
+# package: binary
+
+```haskell
+import Data.Binary.Get
+decodeEntry :: EntryVer -> Get Entry
+decodeEntry parentVer = case parentVer of
+  0 -> do
+    ver &lt;- getWord16le
+    CipherOne emptyCipher &lt;- chooseCipher ver
+    let
+      keySize = maxCipherKeySize emptyCipher
+      ivSize = blockSize emptyCipher
+    key &lt;- getByteString keySize
+    iv &lt;- getByteString ivSize
+    nameBytes &lt;- getLazyByteStringNul
+    let name = T.decodeUtf8With T.lenientDecode (BL.toStrict nameBytes)
+    fileIdBytes &lt;- getLazyByteStringNul
+    let fileId = T.decodeUtf8With T.lenientDecode (BL.toStrict fileIdBytes)
+    size &lt;- return . fromIntegral =&lt;&lt; getWord64le
+    mode &lt;- return . fromIntegral =&lt;&lt; getWord32le
+    ctime &lt;- return . fromIntegral =&lt;&lt; getWord64le
+    mtime &lt;- return . fromIntegral =&lt;&lt; getWord64le
+    return $ Entry ver key iv name fileId size mode ctime mtime
+```
+
+---
+
+# package: HFuse (libfuse)
+
+<center>
+  <img src=fuse_structure.png><br>
+  (from libfuse)
+</center>
+
+
+---
+
+# package: HFuse (libfuse)
+
+```haskell
+import System.Fuse
+
+fuseMain :: Exception e =>
+  FuseOperations fh -> (e -> IO Errno) -> IO ()
+fuseRun :: String -> [String] -> Exception e =>
+  FuseOperations fh -> (e -> IO Errno) -> IO ()
+```
+
+fuse 接受的參數
+  + -d: debug
+  + -s: single thread (不過 HFuse 的設計方式一定要用 multithread 用法)
+  + -h: help.. 應該不會用到
+
+---
+
+# package: HFuse (libfuse)
+
+```haskell
+data FuseOperations fh = FuseOperations
+  { fuseGetFileStat :: FilePath -> IO (Either Errno FileStat)
+  , fuseCreateDevice ::
+    FilePath -> EntryType -> FileMode -> DeviceID -> IO Errno
+  , fuseCreateDirectory :: FilePath -> FileMode -> IO Errno
+  , fuseRemoveLink :: FilePath -> IO Errno
+  , fuseOpen ::
+    FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno fh)
+  , fuseRead
+    :: FilePath -> fh -> ByteCount -> FileOffset
+    -> IO (Either Errno ByteString)
+  , fuseWrite
+    :: FilePath -> fh -> ByteString -> FileOffset
+    -> IO (Either Errno ByteCount)
+  , fuseFlush :: FilePath -> fh -> IO Errno
+  , fuseRelease :: FilePath -> fh -> IO ()
+  ...
+  }
+```
+
+各種挫折 orz 有一堆 libfuse 官方文件也沒提到的潛規則.... orz
+
+---
+
+# System.Console.GetOpt
+
+```haskell
+import System.Environment
+
+getArgs :: IO [String]
+```
+
+```haskell
+import System.Console.GetOpt
+
+getOpt
+  :: ArgOrder a -> [OptDescr a] -> [String]
+  -> ([a], [String], [String])
+
+usageInfo :: String -> [OptDescr a] -> String
+
+data ArgOrder a
+  = RequireOrder
+  | Permute
+  | ReturnInOrder (string -> a)
+
+data OptDescr a = Option [Char] [String] (ArgDescr a) String
+data ArgDescr a
+  = NoArg a
+  | ReqArg (String -> a) String
+  | OptArg (Maybe String -> a) String
+```
+
+---
+
+# System.Console.GetOpt (naive way)
+
+```haskell
+data Opt
+  = OptCreate FileId
+  | OptMount FilePath
+  | OptWork FilePath
+  | OptDebug
+
+optsConfig :: [OptDescr Opt]
+optsConfig =
+  [ Option ['c'] ["create"]
+    ( ReqArg
+      (\containerId -> OptCreate (T.pack containerId))
+      "id for the container"
+    )
+  , ...
+  ]
+
+(parsedOpts, _, errs) = getOpt Permute optsConfig
+
+maybeOptCreate =
+  find (\case {OptCreate fid -> True; _ -> False})
+  parsedOpts
+-- 或
+maybeCreate =
+  findJust (\case {OptCreate fid -> Just fid; _ -> Nothing})
+  parsedOpts
+...
+```
+
+---
+
+# System.Console.GetOpt (functional way)
+
+```haskell
+data Opt = Opt
+  { optCreate :: Maybe FileId
+  , optMount :: Maybe FilePath
+  , optWork :: Maybe FilePath
+  , optDebug :: Bool
+  }
+
+optsConfig :: [OptDescr (Opt -> Opt)]
+optsConfig =
+  [ Option ['c'] ["create"]
+    ( ReqArg
+      ( \containerId opt ->
+        opt {optCreate = Just $ T.pack containerId}
+      )
+      "GDrive folder id"
+    )
+    "Create ..."
+  , ...
+  ]
+
+(parsedOpts, _, errs) = getOpt Permute optsConfig args
+Opt {..} = foldl (\o f -> f o) (Opt Nothing Nothing Nothing False)
+  parsedOpts
+```
+
+---
+
+layout: true
+
+# 感想
+
+---
+
+  + 寫應用的時候放心(亂)寫, 目標也是放在要解決的問題上, 不要擔心會把 Haskell 弄髒
+
+--
+
+  + 相信 Haskell 淨化自己的能力
+
+    我們寫程式總會想便宜行事 <del>懶惰, 缺乏耐性, 目中無人</del>
+
+    在 Haskell 裡, 最便宜的總是最漂亮的結構. 覺得寫不下去的時候就剛好是惡搞過頭的警訊.
+    (也有可能是選用的 library 惡搞過頭...||)
+
+    Haskell 會給你動力, 把程式寫好.
+
+---
+
+  + 如果理論完整的話, Haskell 寫複雜的東西可以寫得很順很簡單, 彷彿天生就是專門對付它們的.
+
+--
+
+  + 如果自己說不清楚, 從取變數名稱開始日子就會過得很辛苦.
+
+    (習慣名稱長長長長長的 Java / C# programmer 可能覺得還好.....)
+
+--
+    Haskell 程式活在 type 的保護傘裡, 寫程式習慣假設別的程式都是正確的. 當別的程式不是 Haskell 寫的, 假設不成立..
+
+    <del>面對亂七八糟的事情 Perl 比較在行</del>
+
+---
+
+  + Haskell library 之間只要依 type 接上了, 就可以用了..
+
+--
+
+    前提是它真的是 Haskell library, 而不是外部程式庫的 Haskell binding.
+
+    只有語法一樣, 但是沒有文化.
+
+--
+
+  + 如果之後再遇到什麼問題, 也可以到這些地方來討論~~
+
+      - [Facebook Functional Thursday 社團](https://www.facebook.com/groups/functioanl.thursday/)<br>
+        (這一個是社團不是粉專, 覺得粉絲頁的形式比較不適合互動討論 orz)
+
+      - [PTT PLT 板](https://www.ptt.cc/bbs/PLT/)
+
+      - [IRC irc.freenode.org #haskell.tw](https://www.irccloud.com/#!/ircs://irc.freenode.net:6697/%23haskell.tw)
+
+--
+
+  + 討論範圍包括.. 詢問推荐適用的 package, 分享遇到的好用的 package, 使用時遇到的問題, 或是有問題邀請大家來修修看.
+
+    個人經驗覺得 Haskell package 開發者還蠻友善的... (compared to Ruby, PHP, Javascript.....)
+
+---
+
+layout: false
+
+# Future work
+
+  + 加上 renew Google token 的功能 (已加)
+
+  + 背景上傳
+
+  + Concurrent operation
+
+        </textarea>
+        <script src=https://gnab.github.io/remark/downloads/remark-0.11.0.min.js></script>
+        <script>
+            var slideshow = remark.create({
+              highlightStyle: 'monokai',
+              highlightLanguage: 'remark'
+            });
+        </script>
+    </body>
+</html>
